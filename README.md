@@ -54,6 +54,11 @@ AgentSeal is not limited to one SWE-bench command. In this beta, it is a broader
 - Includes methodology, limitations, evidence classes, and item-level findings.
 - Opens or lists recent reports directly from the terminal UI.
 
+## Public Example Report
+
+- [SWE-bench Pro corpus-availability audit](docs/reports/swe-bench-pro-audit.md)
+- [Rich HTML version](docs/reports/swe-bench-pro-audit.html)
+
 ### Automation and discovery (Beta)
 
 - `/auto` can discover known benchmark sources and cache downloaded datasets locally.
