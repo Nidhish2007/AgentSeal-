@@ -1812,7 +1812,7 @@ class AgentSealApp(App):
 
         # Find the file
         file_path = None
-        report_dirs = [Path.cwd() / "examples" / "reports", Path("examples/reports")]
+        report_dirs = self._report_dirs()
 
         if name:
             # Search by name
@@ -1932,6 +1932,22 @@ class AgentSealApp(App):
         self._log(Text("  ■ Audit stopped.", style=f"bold {self.cockpit_theme.crit}"))
         self._update_status()
 
+    def _report_dirs(self) -> list[Path]:
+        """Return every report directory AgentSeal may write to."""
+        candidates = [
+            Path.cwd() / "examples" / "reports",
+            Path("examples/reports"),
+            Path.home() / ".agentseal" / "reports",
+        ]
+        seen: set[str] = set()
+        dirs: list[Path] = []
+        for d in candidates:
+            key = str(d.expanduser().resolve() if d.exists() else d.expanduser().absolute())
+            if key not in seen:
+                seen.add(key)
+                dirs.append(d)
+        return dirs
+
     def _cmd_new(self) -> None:
         """Clear the screen and start fresh."""
         try:
@@ -1944,7 +1960,7 @@ class AgentSealApp(App):
 
     def _cmd_history(self) -> None:
         """Show a popup list of previous reports with arrow key navigation."""
-        report_dirs = [Path.cwd() / "examples" / "reports", Path("examples/reports")]
+        report_dirs = self._report_dirs()
         reports = []
         for d in report_dirs:
             if d.exists():
@@ -2032,7 +2048,7 @@ class AgentSealApp(App):
         examples/reports/. This does NOT delete the current session's
         state (report_paths) — it clears the on-disk report history.
         """
-        report_dirs = [Path.cwd() / "examples" / "reports", Path("examples/reports")]
+        report_dirs = self._report_dirs()
         deleted = 0
         for d in report_dirs:
             if d.exists():
@@ -2051,30 +2067,29 @@ class AgentSealApp(App):
     def _cmd_open_report(self, arg: str = "") -> None:
         """Open a report in the browser. Usage: /open [name]
 
-        Without arg: opens the most recent report.
-        With name: opens the matching report (e.g. /open swebench_pro, /open custom_mydata)
+        Without arg: opens the most recent report across every known report
+        directory. With name: opens the newest matching report.
         """
         from .report import open_in_browser
-        report_dirs = [Path.cwd() / "examples" / "reports", Path("examples/reports")]
+        report_dirs = self._report_dirs()
 
         if arg:
-            # User specified a name — find the matching report
             name = arg.strip().lower().replace(" ", "_")
+            matches = []
             for d in report_dirs:
                 if d.exists():
-                    # Try exact match, then partial match
                     for pattern in [f"{name}.html", f"*{name}*.html"]:
-                        matches = list(d.glob(pattern))
-                        if matches:
-                            html_path = matches[0].resolve()
-                            self._log(Text(f"  Opening: {html_path}", style=self.cockpit_theme.accent_2))
-                            if open_in_browser(html_path):
-                                self._log(Text("  ↗ Opened in browser", style=f"bold {self.cockpit_theme.accent_2}"))
-                            else:
-                                self._log(Text(f"  ✗ Could not open. Path: {html_path}", style=self.cockpit_theme.crit))
-                            return
-            self._log(Text(f"  ✗ No report matching '{arg}' found.", style=self.cockpit_theme.crit))
-            # Show available reports
+                        matches.extend(d.glob(pattern))
+            if matches:
+                html_path = sorted(matches, key=lambda p: p.stat().st_mtime, reverse=True)[0].resolve()
+                self._log(Text(f"  Opening: {html_path}", style=self.cockpit_theme.accent_2))
+                if open_in_browser(html_path):
+                    self._log(Text("  Opened in browser", style=f"bold {self.cockpit_theme.accent_2}"))
+                else:
+                    self._log(Text(f"  Could not open. Path: {html_path}", style=self.cockpit_theme.crit))
+                return
+
+            self._log(Text(f"  No report matching '{arg}' found.", style=self.cockpit_theme.crit))
             available = []
             for d in report_dirs:
                 if d.exists():
@@ -2083,39 +2098,41 @@ class AgentSealApp(App):
                 self._log(Text(f"  Available: {', '.join(sorted(set(available)))}", style=self.cockpit_theme.fg_dim))
             return
 
-        # No arg — open most recent
         if self.state.report_paths and "html" in self.state.report_paths:
             html_path = self.state.report_paths["html"]
             self._log(Text(f"  Opening: {html_path}", style=self.cockpit_theme.accent_2))
             if open_in_browser(html_path):
-                self._log(Text("  ↗ Opened in browser", style=f"bold {self.cockpit_theme.accent_2}"))
+                self._log(Text("  Opened in browser", style=f"bold {self.cockpit_theme.accent_2}"))
             else:
-                self._log(Text(f"  ✗ Could not open. Path: {html_path}", style=self.cockpit_theme.crit))
+                self._log(Text(f"  Could not open. Path: {html_path}", style=self.cockpit_theme.crit))
             return
 
-        # Find most recent by file modification time
+        htmls = []
         for d in report_dirs:
             if d.exists():
-                htmls = sorted(d.glob("*.html"), key=lambda p: p.stat().st_mtime, reverse=True)
-                if htmls:
-                    self._log(Text(f"  Opening: {htmls[0]}", style=self.cockpit_theme.accent_2))
-                    if open_in_browser(htmls[0].resolve()):
-                        self._log(Text("  ↗ Opened in browser", style=f"bold {self.cockpit_theme.accent_2}"))
-                    else:
-                        self._log(Text(f"  ✗ Could not open. Path: {htmls[0].resolve()}", style=self.cockpit_theme.crit))
-                    return
-        self._log(Text("  ✗ No reports found. Run /pro or /audit first.", style=self.cockpit_theme.crit))
+                htmls.extend(d.glob("*.html"))
+        htmls = sorted(htmls, key=lambda p: p.stat().st_mtime, reverse=True)
+        if htmls:
+            html_path = htmls[0].resolve()
+            self._log(Text(f"  Opening: {html_path}", style=self.cockpit_theme.accent_2))
+            if open_in_browser(html_path):
+                self._log(Text("  Opened in browser", style=f"bold {self.cockpit_theme.accent_2}"))
+            else:
+                self._log(Text(f"  Could not open. Path: {html_path}", style=self.cockpit_theme.crit))
+            return
+
+        self._log(Text("  No reports found. Run /pro, /audit, /auto, or /wizard first.", style=self.cockpit_theme.crit))
 
     def _cmd_report(self) -> None:
         """View existing reports — shows ALL reports in the reports directory."""
-        report_dirs = [Path.cwd() / "examples" / "reports", Path("examples/reports")]
+        report_dirs = self._report_dirs()
         reports = {}
         for d in report_dirs:
             if d.exists():
                 for f in d.glob("*.json"):
                     reports[f.stem] = f
         if not reports:
-            self._log(Text("  No reports found. Run /audit, /pro, or /wizard first.", style=self.cockpit_theme.fg_dim))
+            self._log(Text("  No reports found. Run /audit, /pro, /auto, or /wizard first.", style=self.cockpit_theme.fg_dim))
             return
         self._log(Text(f"Existing reports ({len(reports)}):", style=f"bold {self.cockpit_theme.accent}"))
         # Sort by modification time (newest first)
