@@ -63,6 +63,8 @@ Inside the AgentSeal terminal UI:
 
 GitHub/HuggingFace tokens are optional. They improve public evidence search and gated dataset loading, but local CodeSeal/Bloom checks can run without pasted tokens when benchmark rows are already local.
 
+Do not trust the claim. Run the audit, inspect the report, and challenge the methodology.
+
 > **Status:** public beta / reproducibility release. AgentSeal detects contamination-risk evidence layers; behavioral model memorization testing is a separate downstream step.
 
 ## Highlights
@@ -176,13 +178,13 @@ The maintainer remains responsible for the project direction, review, release de
 
 For public beta users, the complete docs are:
 
-- [Command guide](docs/COMMANDS.md) — every `/` command, examples, token requirements, and outputs.
-- [Workflows](docs/WORKFLOWS.md) — recommended beta workflows for SWE-bench Verified, SWE-bench Pro, Multi-SWE-bench, and custom datasets.
-- [Methodology](docs/METHODOLOGY.md) — how AgentSeal normalizes rows, verifies evidence, scores risk, and separates evidence classes.
-- [Token setup](docs/TOKENS.md) — how to create, paste, test, and revoke GitHub/HuggingFace tokens.
-- [Report review checklist](docs/REPORT_REVIEW_CHECKLIST.md) — what to check before publishing a report.
-- [Capabilities](docs/CAPABILITIES.md) — supported beta capabilities beyond SWE-bench.
-- [AI-native development disclosure](docs/AI_NATIVE_DEVELOPMENT.md) — how AI-assisted engineering was used responsibly in the project.
+- [Command guide](docs/COMMANDS.md) - every `/` command, examples, token requirements, and outputs.
+- [Workflows](docs/WORKFLOWS.md) - recommended beta workflows for SWE-bench Verified, SWE-bench Pro, Multi-SWE-bench, and custom datasets.
+- [Methodology](docs/METHODOLOGY.md) - how AgentSeal normalizes rows, verifies evidence, scores risk, and separates evidence classes.
+- [Token setup](docs/TOKENS.md) - how to create, paste, test, and revoke GitHub/HuggingFace tokens.
+- [Report review checklist](docs/REPORT_REVIEW_CHECKLIST.md) - what to check before publishing a report.
+- [Capabilities](docs/CAPABILITIES.md) - supported beta capabilities beyond SWE-bench.
+- [AI-native development disclosure](docs/AI_NATIVE_DEVELOPMENT.md) - how AI-assisted engineering was used responsibly in the project.
 
 ## Tokens
 
@@ -199,7 +201,7 @@ AgentSeal separates evidence classes:
 
 - **CodeSeal:** local content-overlap signal from the packaged index.
 - **Stack v2 Bloom:** probabilistic repository-membership signal.
-- **Independent public-source evidence:** exact URLs verified through GitHub/HuggingFace search paths when available.
+- **Mixed public-source evidence:** exact URLs verified through GitHub/HuggingFace search paths when available.
 
 A report should not show a broken or synthetic evidence URL as evidence. If a URL is missing, placeholder-like, or fails strict checks, AgentSeal renders it as `not linked`.
 
