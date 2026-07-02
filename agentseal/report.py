@@ -143,6 +143,11 @@ def _has_independent_or_corpus_signal(ir: InstanceRisk) -> bool:
     )
 
 
+def _has_known_merge_date(ir: InstanceRisk) -> bool:
+    date = str(getattr(ir, "merge_date", "") or "").strip()
+    return bool(date and date not in {"—", "â€”", "-"})
+
+
 def _per_repo_signal_data(report: AuditReport) -> list[dict[str, int | str]]:
     """Aggregate repository rows without relabeling source-PR exposure as contamination."""
     repos: dict[str, dict[str, int]] = {}
@@ -1429,9 +1434,17 @@ _HTML_TEMPLATE = """<!doctype html>
       A benchmark constructed with patches <em>not</em> derived from public GitHub pull requests would score <strong>0%</strong> on independent-source replication. The delta between 0% and {{ ind_rate_html }}% is the finding.
     </p>
     {% endif %}
-    {% if temporal_pre_ind is defined and temporal_pre_ind >= 0 %}
+    {% if ind_count_html > 0 and temporal_known_ind > 0 and temporal_unknown_ind == 0 %}
     <p style="margin-top:8px; color:var(--amber); font-size:13px;">
       <strong>Temporal-adjusted rate:</strong> Of the {{ ind_count_html }} replicated instances, {{ temporal_pre_ind }} were merged before the training-data cutoff ({{ model_cutoff }}). The <strong>pre-cutoff contamination rate is {{ temporal_pre_ind_pct }}%</strong> — this is the meaningful signal. The remaining {{ temporal_post_ind }} are publicly available now but were not yet public at training time.
+    </p>
+    {% elif ind_count_html > 0 and temporal_known_ind > 0 and temporal_unknown_ind > 0 %}
+    <p style="margin-top:8px; color:var(--amber); font-size:13px;">
+      <strong>Temporal alignment partial:</strong> Of the {{ ind_count_html }} replicated instance(s), {{ temporal_known_ind }} had confirmed merge dates: {{ temporal_pre_ind }} before the training-data cutoff ({{ model_cutoff }}) and {{ temporal_post_ind }} after. The remaining {{ temporal_unknown_ind }} are date-unknown and are not counted as pre-cutoff corpus proof.
+    </p>
+    {% elif ind_count_html > 0 and temporal_unknown_ind > 0 %}
+    <p style="margin-top:8px; color:var(--amber); font-size:13px;">
+      <strong>Temporal alignment unavailable:</strong> The {{ ind_count_html }} replicated instance(s) have no confirmed merge dates in this run, so the <strong>pre-cutoff corpus rate is unknown</strong>, not 0%. Treat them as date-unknown public-source replication, not verified training-corpus evidence.
     </p>
     {% endif %}
   </div>
@@ -1795,13 +1808,17 @@ def write_html(report: AuditReport, path: str | Path) -> Path:
     limitations = nlg_limitations(report)
     recommendations = nlg_recs(report)
 
-    # Generate per-instance deep dives for top 10 most contaminated
+    # Generate per-instance deep dives for top evidence-bearing instances.
     ev_by_instance = {}
     for ev in report.evidence:
         ev_by_instance.setdefault(ev.instance_id, []).append(ev)
     _risk_weight = {"critical": 4, "high": 3, "medium": 2, "low": 1, "clean": 0}
+    narrative_candidates = [
+        ir for ir in report.instance_risks
+        if _has_independent_or_corpus_signal(ir)
+    ]
     top_instances = sorted(
-        report.instance_risks,
+        narrative_candidates,
         key=lambda ir: (
             -getattr(ir, "independent_hits", 0),
             -getattr(ir, "codeseal_matches", 0),
@@ -1830,6 +1847,8 @@ def write_html(report: AuditReport, path: str | Path) -> Path:
     temporal_pre_ind = sum(1 for ir in ind_instances_list if ir.merge_date and ir.merge_date != "—" and ir.merge_date < model_cutoff)
     temporal_post_ind = sum(1 for ir in ind_instances_list if ir.merge_date and ir.merge_date != "—" and ir.merge_date >= model_cutoff)
     temporal_pre_ind_pct = round(temporal_pre_ind / total * 100) if total else 0
+    temporal_known_ind = sum(1 for ir in ind_instances_list if _has_known_merge_date(ir))
+    temporal_unknown_ind = max(0, len(ind_instances_list) - temporal_known_ind)
 
     # Risk distribution donut (conic-gradient degrees)
     risk_crit_deg = round(s.critical_count / total * 360) if total else 0
@@ -1891,6 +1910,8 @@ def write_html(report: AuditReport, path: str | Path) -> Path:
         model_cutoff=model_cutoff,
         temporal_pre_ind=temporal_pre_ind,
         temporal_post_ind=temporal_post_ind,
+        temporal_known_ind=temporal_known_ind,
+        temporal_unknown_ind=temporal_unknown_ind,
         temporal_pre_ind_pct=temporal_pre_ind_pct,
         risk_crit_deg=risk_crit_deg,
         risk_high_deg=risk_high_deg,

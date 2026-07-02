@@ -115,6 +115,24 @@ class InstanceRisk(BaseModel):
     merge_date: Optional[str] = None   # PR merged_at timestamp
     temporal_aligned: bool = False     # True if merge_date predates training cutoff
 
+    @field_validator(
+        "patch_exposure",
+        "problem_statement_exposure",
+        "test_patch_exposure",
+        "ngram_overlap_8",
+        "embedding_similarity",
+        "codeseal_similarity",
+        mode="before",
+    )
+    @classmethod
+    def _clamp_unit_float_rounding(cls, v):
+        if isinstance(v, (int, float)):
+            if 1.0 < float(v) <= 1.0 + 1e-9:
+                return 1.0
+            if -1e-9 <= float(v) < 0.0:
+                return 0.0
+        return v
+
 
 class AuditSummary(BaseModel):
     """Aggregate counts for the whole audit."""

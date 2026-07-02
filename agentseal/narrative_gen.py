@@ -983,13 +983,21 @@ def _analyze_repo_concentration(report: AuditReport) -> Optional[Finding]:
     for ir in report.instance_risks:
         if ir.independent_hits > 0:
             repo_counts[ir.repo] = repo_counts.get(ir.repo, 0) + 1
-    if len(repo_counts) < 2:
+    if not repo_counts:
         return None
     sorted_repos = sorted(repo_counts.items(), key=lambda x: -x[1])
     top_repo, top_count = sorted_repos[0]
     top_repo_safe = _esc(top_repo)
     total_repos = len(repo_counts)
-    if total_repos <= 3:
+    total_independent = sum(repo_counts.values())
+    if total_repos == 1:
+        text = (
+            f"Independent-source replication is concentrated entirely in {top_repo_safe}: "
+            f"{top_count} of {total_independent} replicated instance(s) come from this "
+            f"single source repository. Do not generalize this signal to the whole benchmark "
+            f"without additional cross-repository evidence."
+        )
+    elif total_repos <= 3:
         text = (f"Independent-source replication is concentrated in {total_repos} source "
                 f"repositories, with {top_repo_safe} accounting for {top_count} instances.")
     else:
