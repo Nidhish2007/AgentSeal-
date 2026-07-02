@@ -32,7 +32,7 @@ The 234 public-replication signal is **not** a proven contamination rate. It can
 ## Install in One Command
 
 ```powershell
-python -m pip install --force-reinstall "https://github.com/Nidhish2007/AgentSeal-Benchmark-Forensics/releases/download/v5.0.0-beta.2/agentseal-5.0.0-1beta2fix6-py3-none-any.whl"
+python -m pip install --force-reinstall "https://github.com/Nidhish2007/AgentSeal-Benchmark-Forensics/releases/download/v5.0.0-beta.2/agentseal-5.0.0-1beta2fix7-py3-none-any.whl"
 ```
 
 Then run:
@@ -50,7 +50,7 @@ python -m agentseal
 Wheel SHA256:
 
 ```text
-74ed46c83be0772c46bd013ccfd92e9f8bb087771f222ae8c237953e6e6a057c
+f82e1b4960cd99065762f35c1436e118a0554f4df5a608c10b9cd8b1c5ef3204
 ```
 
 ## Reproduce the First Audit
@@ -147,7 +147,7 @@ This makes reports useful for filtering, bucketing, and deeper review without ov
 ```powershell
 cd "$env:USERPROFILE\Downloads"
 python -m pip install --upgrade pip
-python -m pip install --force-reinstall ".\agentseal-5.0.0-1beta2fix6-py3-none-any.whl"
+python -m pip install --force-reinstall ".\agentseal-5.0.0-1beta2fix7-py3-none-any.whl"
 python -m agentseal
 ```
 
