@@ -37,22 +37,40 @@ from textual.suggester import SuggestFromList
 from textual.widgets import Footer, Header, Input, RichLog, Static, Label, ListView, ListItem, Tree, Collapsible
 
 # ---------------------------------------------------------------------------
-# Solid filled block wordmark (pyfiglet 'ansi_shadow' font) — heavy █████ blocks
-# No frame (frame made it too wide and got chopped in 80-char terminals).
+# ASCII wordmark. The earlier block-art logo looked nice on UTF-8 terminals,
+# but rendered as flashing white garbage on some Windows consoles.
 # ---------------------------------------------------------------------------
 
 LOGO_LINES = [
-    " █████╗  ██████╗ ███████╗███╗   ██╗████████╗███████╗███████╗ █████╗ ██╗     ",
-    "██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝██╔════╝██╔════╝██╔══██╗██║     ",
-    "███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ███████╗█████╗  ███████║██║     ",
-    "██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ╚════██║██╔══╝  ██╔══██║██║     ",
-    "██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ███████║███████╗██║  ██║███████╗",
-    "╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝",
-    "                                                                            ",
-    "  ◆━━  contamination auditor for ai agent benchmarks  ━━◆                  ",
+    "     _                    _    _____            _ ",
+    "    / \\   __ _  ___ _ __ | |_ / ____| ___  __ _| |",
+    "   / _ \\ / _` |/ _ \\ '_ \\| __|\\___ \\ / _ \\/ _` | |",
+    "  / ___ \\ (_| |  __/ | | | |_ ____) |  __/ (_| | |",
+    " /_/   \\_\\__, |\\___|_| |_|\\__|_____/ \\___|\\__,_|_|",
+    "         |___/                                      ",
+    "  contamination auditor for ai agent benchmarks      ",
 ]
 
 SPINNER_FRAMES = ["|", "/", "-", "\\"]
+
+_TERMINAL_FALLBACKS = str.maketrans({
+    "✓": "v", "✗": "x", "⚠": "!", "●": "*", "○": "o", "■": "#", "▸": ">",
+    "→": ">", "←": "<", "—": "-", "–": "-", "·": "-", "…": "...",
+    "•": "-", "◆": "*", "━": "-", "─": "-", "┌": "+", "┐": "+",
+    "└": "+", "┘": "+", "│": "|",
+})
+
+
+def _terminal_safe_text(value: object) -> str:
+    return str(value).translate(_TERMINAL_FALLBACKS)
+
+
+def _terminal_safe_renderable(value):
+    if isinstance(value, Text):
+        return Text(_terminal_safe_text(value.plain), style=value.style)
+    if isinstance(value, str):
+        return Text(_terminal_safe_text(value))
+    return value
 
 # Slash commands — /wizard opens the file browser panel
 SLASH_COMMANDS = [
@@ -253,6 +271,8 @@ class SealInput(Input):
 class AgentSealApp(App):
     """AgentSeal v5.0.0 — full-screen terminal cockpit."""
 
+    MAX_REASONING_LINES = 2000
+
     CSS = """
     Screen {
         background: $background;
@@ -354,6 +374,8 @@ class AgentSealApp(App):
         self._audit_task = None
         self._current_worker = None
         self._cancel_requested = False  # Flag checked by audit thread
+        self._reasoning_lines = 0
+        self._reasoning_dropped = 0
 
     @property
     def cockpit_theme(self) -> SealTheme:
@@ -416,7 +438,7 @@ class AgentSealApp(App):
         # in a dark scrollable RichLog. Ctrl+→ expands, Ctrl+← collapses.
         # This replaces the old separate #thinking-panel + #thinking-label.
         from textual.widgets import Collapsible
-        with Collapsible(id="reasoning-box", title="▸ Reasoning Window (Ctrl+→ to expand)", collapsed=True):
+        with Collapsible(id="reasoning-box", title="Reasoning Window (Ctrl+Right to expand)", collapsed=True):
             yield RichLog(id="reasoning-log", markup=True, wrap=True, auto_scroll=True)
         suggester = SuggestFromList(SLASH_COMMANDS, case_sensitive=False)
         with Container(id="input-bar"):
@@ -486,14 +508,14 @@ class AgentSealApp(App):
     def _render_status(self) -> Text:
         t = Text()
         if self.state.audit_complete:
-            t.append("● audit complete\n", style=f"bold {self.cockpit_theme.accent_2}")
+            t.append("[complete] audit complete\n", style=f"bold {self.cockpit_theme.accent_2}")
         elif self.state.audit_running:
             spinner = SPINNER_FRAMES[self.spinner_frame]
             t.append(f"{spinner} {self.state.phase}\n", style=f"bold {self.cockpit_theme.accent}")
         elif self.state.wizard_unlocked:
-            t.append("⚡ wizard mode\n", style=f"bold {self.cockpit_theme.accent}")
+            t.append("[wizard] wizard mode\n", style=f"bold {self.cockpit_theme.accent}")
         else:
-            t.append("○ idle\n", style=self.cockpit_theme.fg_dim)
+            t.append("[idle] idle\n", style=self.cockpit_theme.fg_dim)
         t.append(f"elapsed {self.state.elapsed():.1f}s\n", style=self.cockpit_theme.fg_dim)
         if self.state.audit_running and self.state.total_instances <= 0:
             msg = (self.state.phase_message or self.state.phase or "preparing").strip()
@@ -514,8 +536,7 @@ class AgentSealApp(App):
     def _log(self, text):
         try:
             log = self.query_one("#conversation", RichLog)
-            if isinstance(text, str):
-                text = Text(text)
+            text = _terminal_safe_renderable(text)
             log.write(text)
         except Exception:
             pass
@@ -995,8 +1016,10 @@ class AgentSealApp(App):
             self._log(Text("  ✗ Empty HuggingFace token after cleanup.", style=self.cockpit_theme.crit))
             return
         if not looks_like_hf_token(token):
-            self._log(Text(f"  ⚠ Candidate does not match known HF token format ({mask_secret(token, prefix=4)}).", style=self.cockpit_theme.medium))
-            self._log(Text("    Token format was not recognized as a standard HuggingFace token. Proceeding anyway.", style=self.cockpit_theme.fg_dim))
+            os.environ.pop("HF_TOKEN", None)
+            self._log(Text(f"  ✗ Rejected HuggingFace token: not a standard hf_ token ({mask_secret(token, prefix=4)}).", style=self.cockpit_theme.crit))
+            self._log(Text("    Copy a read token from https://huggingface.co/settings/tokens, then run /hf paste.", style=self.cockpit_theme.fg_dim))
+            return
         if len(token) < 10 or len(token) > 200:
             self._log(Text(f"  ⚠ Token length {len(token)} looks unusual (expected 20-50). Proceeding anyway.", style=self.cockpit_theme.medium))
         # Set in process environment (takes effect immediately).
@@ -1287,6 +1310,12 @@ class AgentSealApp(App):
                 self.state.audit_complete = True
                 self.state.phase = "complete"
                 self._safe_call(self._log, Text(f"  Total: {s.total_instances}  Critical: {s.critical_count}  Rate: {s.contamination_rate*100:.1f}%", style=f"bold {self.cockpit_theme.accent}"))
+                from .report import open_in_browser
+                opened = open_in_browser(html_path.resolve())
+                if opened:
+                    self._safe_call(self._log, Text("  ↗ Opened HTML report in browser", style=f"bold {self.cockpit_theme.accent_2}"))
+                else:
+                    self._safe_call(self._log, Text("  Type /open to open the report in browser", style=f"bold {self.cockpit_theme.accent}"))
 
             except Exception as e:
                 self._safe_call(self._log, Text(f"  ✗ Auto audit failed: {e}", style=self.cockpit_theme.crit))
@@ -2170,7 +2199,14 @@ class AgentSealApp(App):
             # The previous code caught Exception and printed to stderr,
             # silently swallowing real UI bugs. Now fn() exceptions propagate
             # to the audit's outer try/except so they surface in the log.
-            fn(*args, **kwargs)
+            if getattr(self, "is_running", False):
+                return
+            try:
+                fn(*args, **kwargs)
+            except Exception:
+                return
+        except Exception:
+            return
         # Unexpected call_from_thread errors should surface during testing.
 
     def _run_pro_audit(self, data_path: Path, custom: bool = False, sample: int = 0) -> None:
@@ -2502,10 +2538,26 @@ class AgentSealApp(App):
         """
         try:
             log = self.query_one("#reasoning-log", RichLog)
+            if self._reasoning_lines >= self.MAX_REASONING_LINES:
+                self._reasoning_dropped += 1
+                if self._reasoning_dropped == 1:
+                    log.write(Text(
+                        "[reasoning log capped] More reasoning events are being summarized to keep the TUI stable.",
+                        style="dim #b0b0b0",
+                    ))
+                    self._reasoning_lines += 1
+                elif self._reasoning_dropped % 500 == 0:
+                    log.write(Text(
+                        f"[reasoning log capped] Dropped {self._reasoning_dropped:,} extra events.",
+                        style="dim #b0b0b0",
+                    ))
+                    self._reasoning_lines += 1
+                return
             if isinstance(text, str):
-                log.write(Text(text, style="dim #b0b0b0"))
+                log.write(Text(_terminal_safe_text(text), style="dim #b0b0b0"))
             else:
-                log.write(text)
+                log.write(_terminal_safe_renderable(text))
+            self._reasoning_lines += 1
         except Exception:
             pass
 
@@ -2518,11 +2570,11 @@ class AgentSealApp(App):
                 if self.state.audit_running:
                     spinner = SPINNER_FRAMES[self.spinner_frame]
                     phase = self.state.phase[:30] if self.state.phase else "auditing"
-                    box.title = f"{spinner} {phase}  (Ctrl+→ expand · Ctrl+← collapse)"
+                    box.title = f"{spinner} {phase}  (Ctrl+Right expand / Ctrl+Left collapse)"
                 elif self.state.audit_complete:
-                    box.title = f"✓ Audit complete  (Ctrl+→ to review reasoning window)"
+                    box.title = "Audit complete  (Ctrl+Right to review reasoning window)"
                 else:
-                    box.title = f"▸ Reasoning Window  (Ctrl+→ to expand)"
+                    box.title = "Reasoning Window  (Ctrl+Right to expand)"
         except Exception:
             pass
 
@@ -2536,10 +2588,13 @@ class AgentSealApp(App):
         try:
             log = self.query_one("#reasoning-log", RichLog)
             log.clear()
+            self._reasoning_lines = 0
+            self._reasoning_dropped = 0
             if command_label:
                 from rich.text import Text as _T
-                log.write(_T(f"── {command_label} ──", style="bold #ff8c42 on #0a0a0a"))
+                log.write(_T(f"-- {_terminal_safe_text(command_label)} --", style="bold #ff8c42 on #0a0a0a"))
                 log.write(_T("", style="dim"))
+                self._reasoning_lines = 2
         except Exception:
             pass
 

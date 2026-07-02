@@ -215,11 +215,11 @@ def get_hf_token() -> Optional[str]:
     env = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     if env:
         tok = normalize_secret_text(env, kind="hf")
-        return tok or None
+        return tok if looks_like_hf_token(tok) else None
     try:
         if _HF_TOKEN_FILE.exists() and not _HF_TOKEN_FILE.is_symlink():
             data = normalize_secret_text(_HF_TOKEN_FILE.read_text(encoding="utf-8"), kind="hf")
-            if data:
+            if looks_like_hf_token(data):
                 return data
     except Exception:
         pass
@@ -238,7 +238,7 @@ def persist_hf_token(token: str) -> bool:
     process environment so subsequent calls work without a re-read.
     """
     token = normalize_secret_text(token, kind="hf")
-    if not token:
+    if not looks_like_hf_token(token):
         return False
     try:
         _HF_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
