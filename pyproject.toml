@@ -54,6 +54,7 @@ include = ["agentseal*"]
 [tool.setuptools.package-data]
 agentseal = [
   "data/*.sqlite",
+  "data/*.pkl",
   "data/*.bloom",
   "data/*.parquet",
 ]

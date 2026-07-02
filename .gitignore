@@ -29,6 +29,11 @@ reports/
 agentseal_reports/
 *.log
 
+# Large local artifacts are packaged into release wheels, not committed to git.
+agentseal/data/codeseal_model.pkl
+agentseal/data/codeseal_model.sqlite
+agentseal/data/stack_v2.bloom
+
 # OS/editor
 .DS_Store
 Thumbs.db
