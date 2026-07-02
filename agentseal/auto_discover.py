@@ -15,6 +15,7 @@ No manual downloads. No format guessing. No schema mapping. One command.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -778,35 +779,119 @@ def _row_group_key(row: dict) -> tuple:
 
 
 def _read_jsonl_dataframe_streaming(data_file: Path, progress_callback=None, chunksize: int = 5000):
-    """Read a JSONL file with progress instead of a silent full pandas load.
-
-    This is primarily a UX/freeze hardening path: pandas.read_json(lines=True)
-    can be CPU-heavy and silent, which makes the TUI look stuck even when the
-    worker thread is alive. Reading in chunks emits progress and yields between
-    chunks.
-    """
+    """Read a JSONL file with frequent progress instead of a silent pandas load."""
     import pandas as pd
 
-    frames = []
-    rows = 0
-    last_emit = time.monotonic()
-    _emit(progress_callback, "load", f"Reading JSONL in chunks from {data_file.name}...")
+    rows: list[dict] = []
+    lines_seen = 0
+    bad_lines = 0
+    bytes_read = 0
     try:
-        reader = pd.read_json(data_file, lines=True, chunksize=max(1, int(chunksize)))
-        for chunk in reader:
-            frames.append(chunk)
-            rows += len(chunk)
-            now = time.monotonic()
-            if rows <= len(chunk) or rows % (chunksize * 2) == 0 or now - last_emit >= 1.5:
-                last_emit = now
-                _emit(progress_callback, "load", f"Loaded {rows:,} JSONL rows so far...")
-            time.sleep(0)
-        if not frames:
+        total_bytes = data_file.stat().st_size
+    except OSError:
+        total_bytes = 0
+
+    last_emit = time.monotonic()
+    _emit(progress_callback, "load", f"Streaming JSONL from {data_file.name}...")
+
+    try:
+        with open(data_file, "rb") as f:
+            for raw_line in f:
+                lines_seen += 1
+                bytes_read += len(raw_line)
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    bad_lines += 1
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+                else:
+                    bad_lines += 1
+
+                if lines_seen % 250 == 0:
+                    time.sleep(0)
+
+                row_count = len(rows)
+                now = time.monotonic()
+                if row_count == 1 or lines_seen % 1000 == 0 or now - last_emit >= 1.0:
+                    last_emit = now
+                    if total_bytes:
+                        pct = min(100.0, (bytes_read / total_bytes) * 100.0)
+                        msg = (
+                            f"Streaming JSONL: {row_count:,} rows from {lines_seen:,} "
+                            f"lines ({pct:.1f}%, {bad_lines:,} skipped)"
+                        )
+                    else:
+                        msg = (
+                            f"Streaming JSONL: {row_count:,} rows from {lines_seen:,} "
+                            f"lines ({bad_lines:,} skipped)"
+                        )
+                    _emit(progress_callback, "load", msg)
+
+        if not rows:
+            if bad_lines:
+                _emit(progress_callback, "load", f"No valid JSONL rows found ({bad_lines:,} malformed/non-object lines skipped)")
             return pd.DataFrame()
-        _emit(progress_callback, "load", f"Concatenating {len(frames):,} JSONL chunks ({rows:,} rows)...")
-        return pd.concat(frames, ignore_index=True)
-    except ValueError:
+
+        _emit(progress_callback, "load", f"Building dataframe from {len(rows):,} JSONL rows...")
+        df = pd.DataFrame.from_records(rows)
+        _emit(progress_callback, "load", f"Loaded {len(df):,} rows with {len(df.columns):,} columns from JSONL")
+        return df
+    except OSError as exc:
+        _emit(progress_callback, "load", f"Could not read JSONL file: {exc}")
         return pd.DataFrame()
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.getenv(name, "")).strip() or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _auto_large_jsonl_sample_size(
+    data_file: Path,
+    info: BenchmarkInfo,
+    requested_sample_size: int,
+    progress_callback=None,
+) -> int:
+    """Choose a safe default sample for huge JSONL files unless full load is explicit."""
+    if requested_sample_size > 0:
+        return requested_sample_size
+
+    allow_full = str(os.getenv("AGENTSEAL_AUTO_ALLOW_FULL_JSONL", "")).strip().lower()
+    if allow_full in {"1", "true", "yes", "full"}:
+        return 0
+
+    try:
+        size_bytes = data_file.stat().st_size
+    except OSError:
+        return 0
+
+    threshold = max(1, _env_int("AGENTSEAL_AUTO_FULL_JSONL_BYTES", 250 * 1024 * 1024))
+    if size_bytes <= threshold:
+        return 0
+
+    default_sample = _env_int("AGENTSEAL_AUTO_DEFAULT_SAMPLE", 25)
+    if default_sample <= 0:
+        return 0
+
+    expected_instances = int(getattr(info, "instances", 0) or 0)
+    sample_size = min(default_sample, expected_instances) if expected_instances > 0 else default_sample
+    size_mb = size_bytes / (1024 * 1024)
+    _emit(
+        progress_callback,
+        "load",
+        (
+            f"Large JSONL detected ({size_mb:.1f} MB); using streaming stratified sample "
+            f"of {sample_size} rows. Pass an explicit N for a larger run."
+        ),
+    )
+    return sample_size
 
 def _stream_jsonl_stratified_sample(data_file: Path, sample_size: int, progress_callback=None):
     """Load a small stratified JSONL sample without materializing huge files."""
@@ -817,13 +902,25 @@ def _stream_jsonl_stratified_sample(data_file: Path, sample_size: int, progress_
     lines_seen = 0
     # Stop once enough valid candidate rows are loaded; grouping is used only to
     # diversify the selected sample.
-    min_scan = max(200, min(5000, sample_size * 200))
-    max_scan = max(min_scan, sample_size * 1000)
+    try:
+        size_bytes = data_file.stat().st_size
+    except OSError:
+        size_bytes = 0
+    huge_jsonl = size_bytes > max(1, _env_int("AGENTSEAL_AUTO_FULL_JSONL_BYTES", 250 * 1024 * 1024))
+    if huge_jsonl:
+        min_scan = max(1, sample_size)
+        max_scan = max(min_scan, sample_size * 20)
+    else:
+        min_scan = max(200, min(5000, sample_size * 200))
+        max_scan = max(min_scan, sample_size * 1000)
     candidates_seen = 0
+    last_emit = 0.0
     with open(data_file, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             lines_seen += 1
-            if lines_seen == 1 or lines_seen % 5000 == 0:
+            now = time.monotonic()
+            if lines_seen == 1 or lines_seen % 1000 == 0 or now - last_emit >= 1.0:
+                last_emit = now
                 _emit(progress_callback, "load", f"Streaming JSONL sample: scanned {lines_seen:,} lines; groups {len(order)}; candidates {candidates_seen:,}")
             if not line.strip():
                 continue
@@ -961,12 +1058,19 @@ def run_auto(
         progress_callback("load", f"Loading {data_file.name}...")
 
     pre_sampled = False
+    effective_sample_size = sample_size
     if data_file.suffix == ".parquet":
         _emit(progress_callback, "load", "Reading parquet into memory...")
         df = pd.read_parquet(data_file)
     elif data_file.suffix == ".jsonl":
-        if sample_size > 0:
-            df = _stream_jsonl_stratified_sample(data_file, sample_size, progress_callback=progress_callback)
+        effective_sample_size = _auto_large_jsonl_sample_size(
+            data_file,
+            info,
+            requested_sample_size=sample_size,
+            progress_callback=progress_callback,
+        )
+        if effective_sample_size > 0:
+            df = _stream_jsonl_stratified_sample(data_file, effective_sample_size, progress_callback=progress_callback)
             pre_sampled = True
         else:
             df = _read_jsonl_dataframe_streaming(data_file, progress_callback=progress_callback)
@@ -1002,11 +1106,11 @@ def run_auto(
         progress_callback("schema", f"Schema: {schema}")
         progress_callback("mode", f"Audit mode: {audit_type}")
 
-    if sample_size > 0 and not pre_sampled:
-        df = _stratified_sample_df(df, sample_size, schema)
+    if effective_sample_size > 0 and not pre_sampled:
+        df = _stratified_sample_df(df, effective_sample_size, schema)
         if progress_callback:
             progress_callback("sample", f"Stratified sample: {len(df)} rows")
-    elif sample_size > 0 and pre_sampled and progress_callback:
+    elif effective_sample_size > 0 and pre_sampled and progress_callback:
         progress_callback("sample", f"Streaming stratified sample: {len(df)} rows")
 
     # 5. Convert to BenchmarkInstances
